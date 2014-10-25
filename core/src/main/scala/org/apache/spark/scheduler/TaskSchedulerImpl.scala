@@ -89,7 +89,13 @@ private[spark] class TaskSchedulerImpl(
   val activeExecutorIds = new HashSet[String]
 
   // Worker node stats
-  val nodeStats = new HashMap[String, Statistics]
+  protected val nodeStats = new HashMap[String, Statistics]
+
+  // Average speeds for given hosts
+  protected val cpuSpeedAvgs = new HashMap[String, Float]
+  protected val diskSpeedAvgs = new HashMap[String, Float]
+  protected var computeThreshold: Float = 0
+  protected var diskThreshold: Float = 0
 
   // The set of executors we have on each host; this is used to compute hostsAlive, which
   // in turn is used to decide when we can attain data locality on a given host
@@ -249,6 +255,20 @@ private[spark] class TaskSchedulerImpl(
       }
     }
 
+    // TODO: Only do this if we're a compute-bound task
+    /*
+    val cpuRank = offers.sortBy(o => cpuSpeedAvgs(o.host))(Ordering[Float].reverse)
+    val computeAvg = speedAvgs.values.sum / speedAvgs.size.toFloat
+    val cpuGroup = cpuRank.filter((o: WorkerOffer) => speedAvgs(o.host) >= computeAvg)
+//    println("CPU Ranked list:")
+    cpuGroup.foreach {
+      (o: WorkerOffer) =>
+        if(nodeStats.contains(o.host)) {
+          println(nodeStats(o.host).cpuspeed.reduce(_ + _))
+        }
+    }
+    */
+
     // Take each TaskSet in our scheduling order, and then offer it each node in increasing order
     // of locality levels so that it gets a chance to launch local tasks on all of them.
     // NOTE: the preferredLocality order: PROCESS_LOCAL, NODE_LOCAL, NO_PREF, RACK_LOCAL, ANY
@@ -326,6 +346,19 @@ private[spark] class TaskSchedulerImpl(
     }
   }
 
+  def updateNodeStats(execId: String,
+                      stats: Statistics,
+                      threshFunc: (List[Float] => Float)): Unit = synchronized {
+    val hostName = executorIdToHost(execId)
+    val cpuSpeed = stats.cpuspeed.sum / stats.cpuspeed.size.toFloat
+    val diskSpeed = stats.diskspeed.sum / stats.diskspeed.size.toFloat
+    nodeStats(hostName) = stats
+    cpuSpeedAvgs(hostName) = cpuSpeed
+    diskSpeedAvgs(hostName) = diskSpeed
+    computeThreshold = threshFunc(cpuSpeedAvgs.map(_._2).toList)
+    diskThreshold = threshFunc(diskSpeedAvgs.map(_._2).toList)
+  }
+
   /**
    * Update metrics for in-progress tasks and let the master know that the BlockManager is still
    * alive. Return true if the driver knows about the given block manager. Otherwise, return false,
@@ -336,11 +369,9 @@ private[spark] class TaskSchedulerImpl(
       taskMetrics: Array[(Long, TaskMetrics)], // taskId -> TaskMetrics
       blockManagerId: BlockManagerId,
       stats: Statistics): Boolean = {
-    // Update node stats
-    synchronized {
-      val hostName = executorIdToHost(execId)
-      nodeStats(hostName) = stats
-    }
+    // We will just use a simple average to compute the group thresholds for now...
+    val compAvg = (l: List[Float]) => l.sum / l.size.toFloat
+    updateNodeStats(execId, stats, compAvg)
     val metricsWithStageIds: Array[(Long, Int, Int, TaskMetrics)] = synchronized {
       taskMetrics.flatMap { case (id, metrics) =>
         taskIdToTaskSetId.get(id)
