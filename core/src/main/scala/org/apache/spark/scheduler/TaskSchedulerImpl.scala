@@ -277,20 +277,28 @@ private[spark] class TaskSchedulerImpl(
     for (taskSet <- sortedTaskSets; maxLocality <- taskSet.myLocalityLevels) {
       do {
         launchedTask = false
-        for (i <- 0 until shuffledOffers.size) {
-          val execId = shuffledOffers(i).executorId
-          val host = shuffledOffers(i).host
-          if (availableCpus(i) >= CPUS_PER_TASK) {
-            for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {
-              tasks(i) += task
-              val tid = task.taskId
-              taskIdToTaskSetId(tid) = taskSet.taskSet.id
-              taskIdToExecutorId(tid) = execId
-              activeExecutorIds += execId
-              executorsByHost(host) += execId
-              availableCpus(i) -= CPUS_PER_TASK
-              assert(availableCpus(i) >= 0)
-              launchedTask = true
+        taskSet.conf.getOption("rsched.preference") match {
+          case Some("cpu")  => logInfo("Should schedule on CPU-performant node!")
+          case Some("disk") => logInfo("Should schedule on disk-performant node!")
+
+          // The default case is to fall-back onto the default scheduler
+          case _ => {
+            for (i <- 0 until shuffledOffers.size) {
+              val execId = shuffledOffers(i).executorId
+              val host = shuffledOffers(i).host
+              if (availableCpus(i) >= CPUS_PER_TASK) {
+                for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {
+                  tasks(i) += task
+                  val tid = task.taskId
+                  taskIdToTaskSetId(tid) = taskSet.taskSet.id
+                  taskIdToExecutorId(tid) = execId
+                  activeExecutorIds += execId
+                  executorsByHost(host) += execId
+                  availableCpus(i) -= CPUS_PER_TASK
+                  assert(availableCpus(i) >= 0)
+                  launchedTask = true
+                }
+              }
             }
           }
         }
