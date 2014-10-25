@@ -220,6 +220,17 @@ private[spark] class TaskSchedulerImpl(
       .format(manager.taskSet.id, manager.parent.name))
   }
 
+  // NOTE: This method _must_ be synchronized on the object
+  // This is done for us already in resourceOffers()
+  def getGroupedOffers[B: Ordering](
+                        offers: Seq[WorkerOffer],
+                        valMap: HashMap[String, B],
+                        comparator: (B => Boolean)): Seq[WorkerOffer] = {
+    val valid = offers.filter((o: WorkerOffer) => valMap.contains(o.host))
+    val rank  = valid.sortBy((o: WorkerOffer) => valMap(o.host))(Ordering[B].reverse)
+    rank.filter((o: WorkerOffer) => comparator(valMap(o.host)))
+  }
+
   /**
    * Called by cluster manager to offer resources on slaves. We respond by asking our active task
    * sets for tasks in order of priority. We fill each node with tasks in a round-robin manner so
@@ -255,19 +266,9 @@ private[spark] class TaskSchedulerImpl(
       }
     }
 
-    // TODO: Only do this if we're a compute-bound task
-    /*
-    val cpuRank = offers.sortBy(o => cpuSpeedAvgs(o.host))(Ordering[Float].reverse)
-    val computeAvg = speedAvgs.values.sum / speedAvgs.size.toFloat
-    val cpuGroup = cpuRank.filter((o: WorkerOffer) => speedAvgs(o.host) >= computeAvg)
-//    println("CPU Ranked list:")
-    cpuGroup.foreach {
-      (o: WorkerOffer) =>
-        if(nodeStats.contains(o.host)) {
-          println(nodeStats(o.host).cpuspeed.reduce(_ + _))
-        }
-    }
-    */
+    // TODO: Only do these if we're a compute-bound or disk-bound task, respectively
+    val cpuOffers  = getGroupedOffers(offers, cpuSpeedAvgs, (x: Float) => x >= computeThreshold)
+    val diskOffers = getGroupedOffers(offers, diskSpeedAvgs, (x: Float) => x >= diskThreshold)
 
     // Take each TaskSet in our scheduling order, and then offer it each node in increasing order
     // of locality levels so that it gets a chance to launch local tasks on all of them.
