@@ -222,13 +222,15 @@ private[spark] class TaskSchedulerImpl(
 
   // NOTE: This method _must_ be synchronized on the object
   // This is done for us already in resourceOffers()
+  //
+  // This returns a sequence of integers which are indices into the offfers input list.
   def getGroupedOffers[B: Ordering](
                         offers: Seq[WorkerOffer],
                         valMap: HashMap[String, B],
-                        comparator: (B => Boolean)): Seq[WorkerOffer] = {
-    val valid = offers.filter((o: WorkerOffer) => valMap.contains(o.host))
-    val rank  = valid.sortBy((o: WorkerOffer) => valMap(o.host))(Ordering[B].reverse)
-    rank.filter((o: WorkerOffer) => comparator(valMap(o.host)))
+                        comparator: (B => Boolean)): Seq[Int] = {
+    val validIdxs = for(i <- 0 until offers.size if valMap.contains(offers(i).host)) yield i
+    val rank = validIdxs.sortBy((i: Int) => valMap(offers(i).host))(Ordering[B].reverse)
+    rank.filter((i: Int) => comparator(valMap(offers(i).host)))
   }
 
   /**
@@ -266,9 +268,11 @@ private[spark] class TaskSchedulerImpl(
       }
     }
 
-    // TODO: Only do these if we're a compute-bound or disk-bound task, respectively
-    val cpuOffers  = getGroupedOffers(offers, cpuSpeedAvgs, (x: Float) => x >= computeThreshold)
-    val diskOffers = getGroupedOffers(offers, diskSpeedAvgs, (x: Float) => x >= diskThreshold)
+    // This calculates our offers and returns a list with indices into the shuffledOffers
+    val cpuOffers  =
+      getGroupedOffers(shuffledOffers, cpuSpeedAvgs, (x: Float) => x >= computeThreshold)
+    val diskOffers =
+      getGroupedOffers(shuffledOffers, diskSpeedAvgs, (x: Float) => x >= diskThreshold)
 
     // Take each TaskSet in our scheduling order, and then offer it each node in increasing order
     // of locality levels so that it gets a chance to launch local tasks on all of them.
@@ -277,12 +281,21 @@ private[spark] class TaskSchedulerImpl(
     for (taskSet <- sortedTaskSets; maxLocality <- taskSet.myLocalityLevels) {
       do {
         launchedTask = false
-        taskSet.conf.getOption("rsched.preference") match {
-          case Some("cpu")  => logInfo("Should schedule on CPU-performant node!")
-          case Some("disk") => logInfo("Should schedule on disk-performant node!")
+        val pref = taskSet.conf.getOption("rsched.preference")
+        (pref, cpuOffers.isEmpty, diskOffers.isEmpty) match {
+          // CPU-performant node
+          case (Some("cpu"), false, _)  => {
+            logInfo("Should schedule on CPU-performant node!")
+          }
+
+          // Disk-performant node
+          case (Some("disk"), _, false)  => {
+            logInfo("Should schedule on disk-performant node!")
+          }
 
           // The default case is to fall-back onto the default scheduler
           case _ => {
+            logInfo("Scheduling on default spark scheduler...")
             for (i <- 0 until shuffledOffers.size) {
               val execId = shuffledOffers(i).executorId
               val host = shuffledOffers(i).host
