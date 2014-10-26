@@ -274,7 +274,8 @@ private[spark] class TaskSchedulerImpl(
 
     // This calculates our offers and returns a list with indices into the shuffledOffers
     val cpuOffers  =
-      getGroupedOffers(shuffledOffers, cpuSpeedAvgs, (x: Float) => x >= computeThreshold)
+      getGroupedOffers(shuffledOffers, cpuSpeedAvgs, (x: Float) => true)
+        //(x: Float) => x >= computeThreshold)
     val diskOffers =
       getGroupedOffers(shuffledOffers, diskSpeedAvgs, (x: Float) => x >= diskThreshold)
 
@@ -301,23 +302,10 @@ private[spark] class TaskSchedulerImpl(
 
           // The default case is to fall-back onto the default scheduler
           case _ => {
-            for (i <- 0 until shuffledOffers.size) {
-              val execId = shuffledOffers(i).executorId
-              val host = shuffledOffers(i).host
-              if (availableCpus(i) >= CPUS_PER_TASK) {
-                for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {
-                  tasks(i) += task
-                  val tid = task.taskId
-                  taskIdToTaskSetId(tid) = taskSet.taskSet.id
-                  taskIdToExecutorId(tid) = execId
-                  activeExecutorIds += execId
-                  executorsByHost(host) += execId
-                  availableCpus(i) -= CPUS_PER_TASK
-                  assert(availableCpus(i) >= 0)
-                  launchedTask = true
-                }
-              }
-            }
+            // This is a 1-to-1 correspondence
+            val idxList = for(i <- 0 until shuffledOffers.size) yield i
+            launchedTask =
+              scheduleProcess(idxList, shuffledOffers, availableCpus, tasks, taskSet, maxLocality)
           }
         }
       } while (launchedTask)
@@ -327,6 +315,34 @@ private[spark] class TaskSchedulerImpl(
       hasLaunchedTask = true
     }
     return tasks
+  }
+
+  def scheduleProcess(idxList: Seq[Int],
+                      shuffledOffers: Seq[WorkerOffer],
+                      availableCpus: Array[Int],
+                      tasks: Seq[ArrayBuffer[TaskDescription]],
+                      taskSet: TaskSetManager,
+                      maxLocality: TaskLocality.TaskLocality) : Boolean = {
+    var launchedTask = false
+    for (idx <- 0 until idxList.size) {
+      val i = idxList(idx) // Index into our shuffled offers list
+      val execId = shuffledOffers(i).executorId
+      val host = shuffledOffers(i).host
+      if (availableCpus(i) >= CPUS_PER_TASK) {
+        for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {
+          tasks(i) += task
+          val tid = task.taskId
+          taskIdToTaskSetId(tid) = taskSet.taskSet.id
+          taskIdToExecutorId(tid) = execId
+          activeExecutorIds += execId
+          executorsByHost(host) += execId
+          availableCpus(i) -= CPUS_PER_TASK
+          assert(availableCpus(i) >= 0)
+          launchedTask = true
+        }
+      }
+    }
+    launchedTask
   }
 
   def statusUpdate(tid: Long, state: TaskState, serializedData: ByteBuffer) {
