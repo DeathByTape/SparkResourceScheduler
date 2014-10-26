@@ -18,6 +18,7 @@
 package org.apache.spark.scheduler.cluster
 
 import akka.actor.{Address, ActorRef}
+import org.apache.spark.deploy.worker.Statistics
 
 /**
  * Grouping of data for an executor used by CoarseGrainedSchedulerBackend.
@@ -33,5 +34,6 @@ private[cluster] class ExecutorData(
    val executorAddress: Address,
    val executorHost: String ,
    var freeCores: Int,
-   val totalCores: Int
+   val totalCores: Int,
+   val initalStats: Statistics
 )

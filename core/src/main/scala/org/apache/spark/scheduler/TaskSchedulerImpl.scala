@@ -246,6 +246,10 @@ private[spark] class TaskSchedulerImpl(
       executorIdToHost(o.executorId) = o.host
       if (!executorsByHost.contains(o.host)) {
         executorsByHost(o.host) = new HashSet[String]()
+        // We need this data at the time we start
+        // and for our purposes, we never use mesos.. so
+        assert(!o.initialStats.isEmpty)
+        updateStatsHB(o.executorId, o.initialStats.get)
         executorAdded(o.executorId, o.host)
         newExecAvail = true
       }
@@ -285,17 +289,18 @@ private[spark] class TaskSchedulerImpl(
         (pref, cpuOffers.isEmpty, diskOffers.isEmpty) match {
           // CPU-performant node
           case (Some("cpu"), false, _)  => {
+            // TODO(dmcwherter): Implement this
             logInfo("Should schedule on CPU-performant node!")
           }
 
           // Disk-performant node
           case (Some("disk"), _, false)  => {
+            // TODO(dmcwherter): Implement this
             logInfo("Should schedule on disk-performant node!")
           }
 
           // The default case is to fall-back onto the default scheduler
           case _ => {
-            logInfo("Scheduling on default spark scheduler...")
             for (i <- 0 until shuffledOffers.size) {
               val execId = shuffledOffers(i).executorId
               val host = shuffledOffers(i).host
@@ -368,9 +373,9 @@ private[spark] class TaskSchedulerImpl(
     }
   }
 
-  def updateNodeStats(execId: String,
+  private def updateNodeStats(execId: String,
                       stats: Statistics,
-                      threshFunc: (List[Float] => Float)): Unit = synchronized {
+                      threshFunc: (List[Float] => Float)): Unit = {
     val hostName = executorIdToHost(execId)
     val cpuSpeed = stats.cpuspeed.sum / stats.cpuspeed.size.toFloat
     val diskSpeed = stats.diskspeed.sum / stats.diskspeed.size.toFloat
@@ -379,6 +384,14 @@ private[spark] class TaskSchedulerImpl(
     diskSpeedAvgs(hostName) = diskSpeed
     computeThreshold = threshFunc(cpuSpeedAvgs.map(_._2).toList)
     diskThreshold = threshFunc(diskSpeedAvgs.map(_._2).toList)
+  }
+
+  // This is how the heartbeats update node stats
+  def updateStatsHB(execId: String,
+                     stats: Statistics) : Unit = {
+    // Update stats with an "average" threshold
+    val compAvg = (l: List[Float]) => l.sum / l.size.toFloat
+    updateNodeStats(execId, stats, compAvg)
   }
 
   /**
@@ -392,8 +405,9 @@ private[spark] class TaskSchedulerImpl(
       blockManagerId: BlockManagerId,
       stats: Statistics): Boolean = {
     // We will just use a simple average to compute the group thresholds for now...
-    val compAvg = (l: List[Float]) => l.sum / l.size.toFloat
-    updateNodeStats(execId, stats, compAvg)
+    synchronized {
+      updateStatsHB(execId, stats)
+    }
     val metricsWithStageIds: Array[(Long, Int, Int, TaskMetrics)] = synchronized {
       taskMetrics.flatMap { case (id, metrics) =>
         taskIdToTaskSetId.get(id)
