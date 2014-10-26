@@ -94,6 +94,7 @@ private[spark] class TaskSchedulerImpl(
   // Average speeds for given hosts
   protected val cpuSpeedAvgs = new HashMap[String, Float]
   protected val diskSpeedAvgs = new HashMap[String, Float]
+  protected val overallSpeeds = new HashMap[String, Float]
   protected var computeThreshold: Float = 0
   protected var diskThreshold: Float = 0
 
@@ -223,13 +224,13 @@ private[spark] class TaskSchedulerImpl(
   // NOTE: This method _must_ be synchronized on the object
   // This is done for us already in resourceOffers()
   //
-  // This returns a sequence of integers which are indices into the offfers input list.
+  // This returns a sequence of integers which are indices into the offers input list.
   def getGroupedOffers[B: Ordering](
                         offers: Seq[WorkerOffer],
                         valMap: HashMap[String, B],
                         comparator: (B => Boolean)): Seq[Int] = {
     val validIdxs = for(i <- 0 until offers.size if valMap.contains(offers(i).host)) yield i
-    val rank = validIdxs.sortBy((i: Int) => valMap(offers(i).host))(Ordering[B].reverse)
+    val rank = validIdxs.sortBy((i: Int) => valMap(offers(i).host))
     rank.filter((i: Int) => comparator(valMap(offers(i).host)))
   }
 
@@ -273,13 +274,24 @@ private[spark] class TaskSchedulerImpl(
     }
 
     // This calculates our offers and returns a list with indices into the shuffledOffers
-    // TODO(dmcwherter): Changed this function to include full ordered index lists
-    val cpuIdxs  =
-      getGroupedOffers(shuffledOffers, cpuSpeedAvgs, (x: Float) => true)
-        //(x: Float) => x >= computeThreshold)
-    val diskIdxs =
-      getGroupedOffers(shuffledOffers, diskSpeedAvgs, (x: Float) => true)
-        //x >= diskThreshold)
+    var cpuIdxs  = getGroupedOffers(shuffledOffers, cpuSpeedAvgs,
+      (x: Float) => x >= computeThreshold)
+    var diskIdxs =
+      getGroupedOffers(shuffledOffers, diskSpeedAvgs, (x: Float) => x >= diskThreshold)
+    val overallIdxs =
+      getGroupedOffers(shuffledOffers, overallSpeeds, (x: Float) => true)
+
+    // After threshold, we start adding things in order of "best overall" machine
+    overallIdxs.foreach {
+      (idx: Int) =>
+        val addNewElem = (i: Int, l: Seq[Int]) => if(!l.contains(i)) l :+ i else l
+        diskIdxs = addNewElem(idx, diskIdxs)
+        cpuIdxs  = addNewElem(idx, cpuIdxs)
+    }
+    // We should have the same number of everything
+    assert(overallIdxs.size == shuffledOffers.size)
+    assert(overallIdxs.size == diskIdxs.size)
+    assert(overallIdxs.size == cpuIdxs.size)
 
     // Take each TaskSet in our scheduling order, and then offer it each node in increasing order
     // of locality levels so that it gets a chance to launch local tasks on all of them.
@@ -306,12 +318,11 @@ private[spark] class TaskSchedulerImpl(
               scheduleProcess(diskIdxs, shuffledOffers, availableCpus, tasks, taskSet, maxLocality)
           }
 
-          // The default case is to fall-back onto the default scheduler
+          // Default is to choose next overall best machine
           case _ => {
-            // This is a 1-to-1 correspondence
-            val idxList = for(i <- 0 until shuffledOffers.size) yield i
             launchedTask =
-              scheduleProcess(idxList, shuffledOffers, availableCpus, tasks, taskSet, maxLocality)
+              scheduleProcess(overallIdxs, shuffledOffers, availableCpus, tasks, taskSet,
+                maxLocality)
           }
         }
       } while (launchedTask)
@@ -402,9 +413,17 @@ private[spark] class TaskSchedulerImpl(
     val hostName = executorIdToHost(execId)
     val cpuSpeed = stats.cpuspeed.sum / stats.cpuspeed.size.toFloat
     val diskSpeed = stats.diskspeed.sum / stats.diskspeed.size.toFloat
+    // Throughput estimate-- used as constant value in ms
+    // NOTE: a more accurate use of this would be to divide expected
+    // data output, but we don't currently have that
+    // We take latency from a SINGLE ping packet (typically 84B)
+    // Therefore, network overhead is 2*latency for request and response
+    // + latency as our constant throughput estimate
+    val networkOverhead = 3.toFloat * stats.latency
     nodeStats(hostName) = stats
-    cpuSpeedAvgs(hostName) = cpuSpeed
+    cpuSpeedAvgs(hostName)  = cpuSpeed
     diskSpeedAvgs(hostName) = diskSpeed
+    overallSpeeds(hostName) =  cpuSpeed + diskSpeed + networkOverhead
     computeThreshold = threshFunc(cpuSpeedAvgs.map(_._2).toList)
     diskThreshold = threshFunc(diskSpeedAvgs.map(_._2).toList)
   }
