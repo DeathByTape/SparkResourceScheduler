@@ -21,6 +21,7 @@ import java.nio.ByteBuffer
 
 import org.apache.spark.TaskState.TaskState
 import org.apache.spark.util.{SerializableBuffer, Utils}
+import org.apache.spark.deploy.worker.Statistics
 
 private[spark] sealed trait CoarseGrainedClusterMessage extends Serializable
 
@@ -39,7 +40,7 @@ private[spark] object CoarseGrainedClusterMessages {
   case class RegisterExecutorFailed(message: String) extends CoarseGrainedClusterMessage
 
   // Executors to driver
-  case class RegisterExecutor(executorId: String, hostPort: String, cores: Int)
+  case class RegisterExecutor(executorId: String, hostPort: String, cores: Int, stats: Statistics)
     extends CoarseGrainedClusterMessage {
     Utils.checkHostPort(hostPort, "Expected host port")
   }

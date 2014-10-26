@@ -26,6 +26,7 @@ import org.apache.spark.TaskState.TaskState
 import org.apache.spark.executor.{Executor, ExecutorBackend}
 import org.apache.spark.scheduler.{SchedulerBackend, TaskSchedulerImpl, WorkerOffer}
 import org.apache.spark.util.ActorLogReceive
+import org.apache.spark.deploy.worker.NodeStats
 
 private case class ReviveOffers()
 
@@ -72,7 +73,8 @@ private[spark] class LocalActor(
   }
 
   def reviveOffers() {
-    val offers = Seq(new WorkerOffer(localExecutorId, localExecutorHostname, freeCores))
+    val offers = Seq(new WorkerOffer(localExecutorId, localExecutorHostname, freeCores,
+      Some(new NodeStats("localhost").getAllStats)))
     for (task <- scheduler.resourceOffers(offers).flatten) {
       freeCores -= scheduler.CPUS_PER_TASK
       executor.launchTask(executorBackend, task.taskId, task.name, task.serializedTask)

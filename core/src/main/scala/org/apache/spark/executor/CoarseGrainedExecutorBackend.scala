@@ -28,7 +28,7 @@ import akka.remote.{RemotingLifecycleEvent, DisassociatedEvent}
 import org.apache.spark.{Logging, SecurityManager, SparkConf, SparkEnv}
 import org.apache.spark.TaskState.TaskState
 import org.apache.spark.deploy.SparkHadoopUtil
-import org.apache.spark.deploy.worker.WorkerWatcher
+import org.apache.spark.deploy.worker.{NodeStats, WorkerWatcher, Statistics}
 import org.apache.spark.scheduler.TaskDescription
 import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages._
 import org.apache.spark.util.{ActorLogReceive, AkkaUtils, SignalLogger, Utils}
@@ -38,6 +38,7 @@ private[spark] class CoarseGrainedExecutorBackend(
     executorId: String,
     hostPort: String,
     cores: Int,
+    stats: Statistics,
     sparkProperties: Seq[(String, String)])
   extends Actor with ActorLogReceive with ExecutorBackend with Logging {
 
@@ -49,7 +50,7 @@ private[spark] class CoarseGrainedExecutorBackend(
   override def preStart() {
     logInfo("Connecting to driver: " + driverUrl)
     driver = context.actorSelection(driverUrl)
-    driver ! RegisterExecutor(executorId, hostPort, cores)
+    driver ! RegisterExecutor(executorId, hostPort, cores, stats)
     context.system.eventStream.subscribe(self, classOf[RemotingLifecycleEvent])
   }
 
@@ -135,7 +136,8 @@ private[spark] object CoarseGrainedExecutorBackend extends Logging {
       val sparkHostPort = hostname + ":" + boundPort
       actorSystem.actorOf(
         Props(classOf[CoarseGrainedExecutorBackend],
-          driverUrl, executorId, sparkHostPort, cores, props),
+          driverUrl, executorId, sparkHostPort, cores,
+          new NodeStats(hostname).getAllStats, props),
         name = "Executor")
       workerUrl.foreach { url =>
         actorSystem.actorOf(Props(classOf[WorkerWatcher], url), name = "WorkerWatcher")
