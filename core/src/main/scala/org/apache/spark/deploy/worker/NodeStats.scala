@@ -27,11 +27,11 @@ import scala.sys.process._
 /**
  * Data type to hold all statistics
  *
- * @param cpuspeed    List of CPU speeds (in MHz)
+ * @param cpuspeed    List of CPU speeds (in ms)
  * @param diskspeed   List of disk speeds (in milliseconds per access)
  * @param maxMem      Max memory provided by JVM (in bytes)
  * @param availMem    Available memory (in bytes)
- * @param latency     Current average latency between node and master
+ * @param latency     Current average latency between node and master (in ms)
  */
 case class Statistics(cpuspeed: List[Float], diskspeed: List[Float], maxMem: Long, availMem: Long,
                       latency: Float)
@@ -145,13 +145,18 @@ class NodeStats(val masterNode: String) {
   /**
    * CPU information as reported by /proc/cpuinfo
    *
-   * @return  List of CPU speeds in MHz. One entry per core
+   * @return  List of CPU speeds in ms. One entry per core
    */
   def getCPUInfo: List[Float] = {
     val src   = fromFile("/proc/cpuinfo")
     val lines = src.mkString.split("\n")
-    src.close
-    lines.filter(_.startsWith("cpu MHz")).map(_.split(":")(1).trim.toFloat).toList
+    src.close()
+    val mhz = lines.filter(_.startsWith("cpu MHz")).map(_.split(":")(1).trim.toFloat).toList
+    // MHz to ms conversion:
+    //   MHz = 10^6 / s
+    //   MHz = 10^3 / ms ---> ms / 10^3
+    // Therefore, 1MHz is equivalent to .001ms
+    mhz.map(_ * 0.001f)
   }
 }
 
