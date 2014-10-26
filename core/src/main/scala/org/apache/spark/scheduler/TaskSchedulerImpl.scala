@@ -273,11 +273,13 @@ private[spark] class TaskSchedulerImpl(
     }
 
     // This calculates our offers and returns a list with indices into the shuffledOffers
-    val cpuOffers  =
+    // TODO(dmcwherter): Changed this function to include full ordered index lists
+    val cpuIdxs  =
       getGroupedOffers(shuffledOffers, cpuSpeedAvgs, (x: Float) => true)
         //(x: Float) => x >= computeThreshold)
-    val diskOffers =
-      getGroupedOffers(shuffledOffers, diskSpeedAvgs, (x: Float) => x >= diskThreshold)
+    val diskIdxs =
+      getGroupedOffers(shuffledOffers, diskSpeedAvgs, (x: Float) => true)
+        //x >= diskThreshold)
 
     // Take each TaskSet in our scheduling order, and then offer it each node in increasing order
     // of locality levels so that it gets a chance to launch local tasks on all of them.
@@ -287,17 +289,21 @@ private[spark] class TaskSchedulerImpl(
       do {
         launchedTask = false
         val pref = taskSet.conf.getOption("rsched.preference")
-        (pref, cpuOffers.isEmpty, diskOffers.isEmpty) match {
+        (pref, cpuIdxs.isEmpty, diskIdxs.isEmpty) match {
           // CPU-performant node
           case (Some("cpu"), false, _)  => {
-            // TODO(dmcwherter): Implement this
-            logInfo("Should schedule on CPU-performant node!")
+            logInfo("-- [RSCHED] CPU-performant node (preferred): " +
+              shuffledOffers(cpuIdxs(0)).host)
+            launchedTask =
+              scheduleProcess(cpuIdxs, shuffledOffers, availableCpus, tasks, taskSet, maxLocality)
           }
 
           // Disk-performant node
           case (Some("disk"), _, false)  => {
-            // TODO(dmcwherter): Implement this
-            logInfo("Should schedule on disk-performant node!")
+            logInfo("-- [RSCHED] Disk-performant node (preferred): " +
+              shuffledOffers(diskIdxs(0)).host)
+            launchedTask =
+              scheduleProcess(diskIdxs, shuffledOffers, availableCpus, tasks, taskSet, maxLocality)
           }
 
           // The default case is to fall-back onto the default scheduler
@@ -339,6 +345,7 @@ private[spark] class TaskSchedulerImpl(
           availableCpus(i) -= CPUS_PER_TASK
           assert(availableCpus(i) >= 0)
           launchedTask = true
+          logInfo("-- [RSCHED] Actually scheduled on: " + host)
         }
       }
     }
