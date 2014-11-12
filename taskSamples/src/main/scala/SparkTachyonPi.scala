@@ -15,30 +15,40 @@
  * limitations under the License.
  */
 
-package taskSamples
+package org.apache.spark.examples
 
 import scala.math.random
 
 import org.apache.spark._
+import org.apache.spark.storage.StorageLevel
 
-/** Computes an approximation to pi */
-/** Usage: SparkPi [greedy_mode] */
-object SparkPi {
+/**
+ *  Computes an approximation to pi
+ *  This example uses Tachyon to persist rdds during computation.
+ *
+ * Usage: SparkTachyonPi <slices> [greedy_mode]
+ */
+object SparkTachyonPi {
   def main(args: Array[String]) {
-    val conf = new SparkConf().setAppName("Spark Pi")
-    if(args.length > 0) {
+    val sparkConf = new SparkConf().setAppName("SparkTachyonPi")
+    if(args.length > 1) {
       println("Operating in greedy mode!")
-      conf.set("rsched.preference", "cpu") /** NOTE: This is our magic */
+      sparkConf.set("rsched.preference", "cpu") /** NOTE: This is our magic */
     }
-    val spark = new SparkContext(conf)
+    val spark = new SparkContext(sparkConf)
+
     val slices = if (args.length > 0) args(0).toInt else 2
     val n = 100000 * slices
-    val count = spark.parallelize(1 to n, slices).map { i =>
+
+    val rdd = spark.parallelize(1 to n, slices)
+    rdd.persist(StorageLevel.OFF_HEAP)
+    val count = rdd.map { i =>
       val x = random * 2 - 1
       val y = random * 2 - 1
-      if (x*x + y*y < 1) 1 else 0
+      if (x * x + y * y < 1) 1 else 0
     }.reduce(_ + _)
     println("Pi is roughly " + 4.0 * count / n)
+
     spark.stop()
   }
 }
