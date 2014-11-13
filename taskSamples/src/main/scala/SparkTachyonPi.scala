@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.examples
+package taskSamples
 
 import scala.math.random
 
