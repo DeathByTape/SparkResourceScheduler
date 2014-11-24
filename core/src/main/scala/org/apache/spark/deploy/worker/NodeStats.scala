@@ -132,12 +132,16 @@ class NodeStats(val masterNode: String) {
     } else {
       val pingCmd = "ping -c 1 " + masterNode
       println(pingCmd)
-      val pingRes = pingCmd.!!
-      val pattern = """mdev = \d+\.\d+\/(\d+\.\d+)/""".r
-      val res = pattern.findFirstMatchIn(pingRes)
-      res match {
-        case Some(m) => Some(m.group(1).toFloat)
-        case None => None
+      try {
+        val pingRes = pingCmd.!!
+        val pattern = """mdev = \d+\.\d+\/(\d+\.\d+)/""".r
+        val res = pattern.findFirstMatchIn(pingRes)
+        res match {
+          case Some(m) => Some(m.group(1).toFloat)
+          case None => None
+        }
+      } catch {
+        case e:Exception => None
       }
     }
   }
